@@ -11,8 +11,10 @@ crate-type = ["cdylib"]
 pyo3   = { version = "0.28", features = ["extension-module"] }
 numpy  = "0.28"
 burn   = { version = "0.21", features = ["flex"] }
-burn-flex = "0.21"
-onnx-ir   = "0.21"
+burn-flex    = "0.21"
+burn-backend = "0.21"
+onnx-ir      = "0.21"
+cubecl-common = "0.10"
 bytes     = "1"
 bytemuck  = { version = "1", features = ["extern_crate_alloc"] }
 
