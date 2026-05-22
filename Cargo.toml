@@ -1,0 +1,21 @@
+[package]
+name = "burn-python"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "_burn_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3   = { version = "0.28", features = ["extension-module"] }
+numpy  = "0.28"
+burn   = { version = "0.21", features = ["flex"] }
+burn-flex = "0.21"
+onnx-ir   = "0.21"
+bytes     = "1"
+bytemuck  = { version = "1", features = ["extern_crate_alloc"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
