@@ -6,3 +6,6 @@ dist/
 __pycache__/
 .venv/
 Cargo.lock
+.claude/
+tests/*.onnx
+tests/*.npy

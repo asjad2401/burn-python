@@ -3,6 +3,7 @@ Tensor bridge tests — correctness + perf vs raw numpy.
 Run with: python tests/test_bridge.py
 """
 
+import sys
 import time
 import numpy as np
 import burn_python as burn
@@ -10,8 +11,13 @@ import burn_python as burn
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
+failures = 0
+
 def check(label, cond):
+    global failures
     print(f"  {'[' + PASS + ']' if cond else '[' + FAIL + ']'} {label}")
+    if not cond:
+        failures += 1
     return cond
 
 # ── correctness ──────────────────────────────────────────────────────────────
@@ -85,3 +91,7 @@ for n_elems, label in [(1_000, "1K"), (100_000, "100K"), (1_000_000, "1M"), (10_
     print(f"  {label:>6} f32  |  burn {burn_ms:.3f} ms  |  np.copy {np_ms:.3f} ms  |  ratio {ratio:.1f}x")
 
 print()
+
+if failures:
+    print(f"{failures} check(s) failed")
+    sys.exit(1)
