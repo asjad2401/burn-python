@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use burn_backend::backend::ops::FloatTensorOps;
 use onnx_ir::ir::{Argument, ValueSource};
 
-use crate::tensor::{default_device, FloatPrim, B};
+use crate::tensor::{B, FloatPrim, default_device};
 
 pub struct ExecutionContext<'w> {
     tensors: HashMap<String, FloatPrim>,
@@ -15,11 +15,15 @@ pub struct ExecutionContext<'w> {
 
 impl<'w> ExecutionContext<'w> {
     pub fn new(weights: &'w HashMap<String, FloatPrim>) -> Self {
-        Self { tensors: HashMap::new(), weights }
+        Self {
+            tensors: HashMap::new(),
+            weights,
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<FloatPrim> {
-        self.tensors.get(name)
+        self.tensors
+            .get(name)
             .or_else(|| self.weights.get(name))
             .cloned()
     }
@@ -43,7 +47,8 @@ impl<'w> ExecutionContext<'w> {
                     }
                 }
                 // anonymous inline static — convert on the fly
-                arg.value().map(|d| B::float_from_data(d, &default_device()))
+                arg.value()
+                    .map(|d| B::float_from_data(d, &default_device()))
             }
             ValueSource::Optional => None,
         }

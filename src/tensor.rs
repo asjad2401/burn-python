@@ -3,7 +3,7 @@
 // in:  numpy f32 -> TensorData (one copy) -> FlexTensor
 // out: FlexTensor -> TensorData (sync CPU read) -> numpy f32 (one copy)
 
-use burn_backend::{backend::ops::FloatTensorOps, TensorData, DType};
+use burn_backend::{DType, TensorData, backend::ops::FloatTensorOps};
 use burn_flex::{Flex, FlexDevice, FlexTensor};
 use cubecl_common::reader::read_sync;
 use numpy::{PyArray1, PyArrayDyn, PyArrayMethods, PyReadonlyArrayDyn, PyUntypedArrayMethods};
@@ -32,8 +32,7 @@ pub fn numpy_to_flex(arr: &PyReadonlyArrayDyn<'_, f32>) -> FloatPrim {
 // FlexTensor -> numpy f32 ndarray (sync read + one copy out)
 pub fn flex_to_numpy<'py>(py: Python<'py>, prim: FloatPrim) -> Bound<'py, PyArrayDyn<f32>> {
     // for CPU backends the future resolves immediately
-    let data: TensorData = read_sync(B::float_into_data(prim))
-        .expect("float_into_data error");
+    let data: TensorData = read_sync(B::float_into_data(prim)).expect("float_into_data error");
 
     let shape: Vec<usize> = data.shape.iter().copied().collect();
     let floats: &[f32] = bytemuck::cast_slice(data.as_bytes());

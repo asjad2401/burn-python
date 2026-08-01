@@ -1,15 +1,15 @@
+use super::super::context::ExecutionContext;
+use crate::tensor::{B, default_device};
 use burn_backend::{
-    backend::ops::{FloatTensorOps, ModuleOps},
-    backend::ops::ConvOptions,
     TensorData, TensorMetadata,
+    backend::ops::ConvOptions,
+    backend::ops::{FloatTensorOps, ModuleOps},
 };
 use onnx_ir::{
+    batch_norm::{BatchNormConfig, BatchNormalizationNode},
     conv2d::Conv2dNode,
-    batch_norm::{BatchNormalizationNode, BatchNormConfig},
     node::padding::PaddingConfig2d,
 };
-use crate::tensor::{B, default_device};
-use super::super::context::ExecutionContext;
 
 fn symmetric_padding(cfg: &PaddingConfig2d) -> [usize; 2] {
     match cfg {
@@ -21,8 +21,10 @@ fn symmetric_padding(cfg: &PaddingConfig2d) -> [usize; 2] {
 }
 
 pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
-    let x    = ctx.resolve(&node.inputs[0]).expect("conv2d: missing input");
-    let w    = ctx.resolve(&node.inputs[1]).expect("conv2d: missing weight");
+    let x = ctx.resolve(&node.inputs[0]).expect("conv2d: missing input");
+    let w = ctx
+        .resolve(&node.inputs[1])
+        .expect("conv2d: missing weight");
     let bias = node.inputs.get(2).and_then(|a| ctx.resolve(a));
 
     let pad = symmetric_padding(&node.config.padding);
@@ -39,9 +41,11 @@ pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
 // BatchNorm dispatch — uses pre-fused scale/offset computed at load time.
 // Falls back to full computation if pre-fusion wasn't possible.
 pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContext) {
-    let x = ctx.resolve(&node.inputs[0]).expect("batch_norm: missing input");
+    let x = ctx
+        .resolve(&node.inputs[0])
+        .expect("batch_norm: missing input");
 
-    let scale_key  = format!("{}::scale",  node.name);
+    let scale_key = format!("{}::scale", node.name);
     let offset_key = format!("{}::offset", node.name);
 
     if let (Some(scale), Some(offset)) = (ctx.get(&scale_key), ctx.get(&offset_key)) {
@@ -51,20 +55,28 @@ pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContex
         ctx.insert(node.outputs[0].name.clone(), y);
     } else {
         // fallback: full manual BN (slow, but correct)
-        let gamma = ctx.resolve(&node.inputs[1]).expect("batch_norm: missing gamma");
-        let beta  = ctx.resolve(&node.inputs[2]).expect("batch_norm: missing beta");
-        let mean  = ctx.resolve(&node.inputs[3]).expect("batch_norm: missing mean");
-        let var   = ctx.resolve(&node.inputs[4]).expect("batch_norm: missing var");
+        let gamma = ctx
+            .resolve(&node.inputs[1])
+            .expect("batch_norm: missing gamma");
+        let beta = ctx
+            .resolve(&node.inputs[2])
+            .expect("batch_norm: missing beta");
+        let mean = ctx
+            .resolve(&node.inputs[3])
+            .expect("batch_norm: missing mean");
+        let var = ctx
+            .resolve(&node.inputs[4])
+            .expect("batch_norm: missing var");
 
         let eps = match &node.config {
-            BatchNormConfig::Static(c)  => c.epsilon as f32,
+            BatchNormConfig::Static(c) => c.epsilon as f32,
             BatchNormConfig::Runtime(c) => c.epsilon as f32,
         };
         let rank = x.shape().num_dims();
         let c = gamma.shape().iter().next().copied().unwrap_or(1);
         let bshape: Vec<usize> = std::iter::once(1)
             .chain(std::iter::once(c))
-            .chain(std::iter::repeat(1).take(rank - 2))
+            .chain(std::iter::repeat_n(1, rank - 2))
             .collect();
         let bcast = |t| B::float_reshape(t, bshape.clone().into());
         let eps_t = B::float_from_data(TensorData::from([eps]), &default_device());
