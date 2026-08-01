@@ -6,6 +6,7 @@ Compare burn-python vs ONNX Runtime:
 Run: python tests/compare_ort.py
 """
 
+import sys
 import time
 import numpy as np
 import onnxruntime as ort
@@ -17,8 +18,13 @@ RUNS  = 500
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
+failures = 0
+
 def check(label, cond):
+    global failures
     print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
+    if not cond:
+        failures += 1
     return cond
 
 # ── load both ──────────────────────────────────────────────────────────────────
@@ -70,3 +76,7 @@ for batch in [1, 16, 64, 256]:
     print(f"  batch={batch:<4}  burn {burn_ms:.3f} ms  |  ORT {ort_ms:.3f} ms  |  ratio {ratio:.1f}x")
 
 print()
+
+if failures:
+    print(f"{failures} check(s) failed")
+    sys.exit(1)

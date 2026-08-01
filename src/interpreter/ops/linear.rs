@@ -1,11 +1,15 @@
-use burn_backend::backend::ops::FloatTensorOps;
-use onnx_ir::{linear::LinearNode, gemm::GemmNode};
-use crate::tensor::{B, default_device};
 use super::super::context::ExecutionContext;
+use crate::tensor::{B, default_device};
+use burn_backend::backend::ops::FloatTensorOps;
+use onnx_ir::{gemm::GemmNode, linear::LinearNode};
 
 pub fn linear(node: &LinearNode, ctx: &mut ExecutionContext) {
-    let x = ctx.get(&node.inputs[0].name).expect("linear: missing input");
-    let w = ctx.get(&node.inputs[1].name).expect("linear: missing weight");
+    let x = ctx
+        .get(&node.inputs[0].name)
+        .expect("linear: missing input");
+    let w = ctx
+        .get(&node.inputs[1].name)
+        .expect("linear: missing weight");
 
     // Gemm layout: w is [out, in], needs transpose before matmul
     // MatMul layout: w is [in, out], use as-is
@@ -47,8 +51,16 @@ pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) {
     let a = ctx.get(&node.inputs[0].name).expect("gemm: missing A");
     let b = ctx.get(&node.inputs[1].name).expect("gemm: missing B");
 
-    let a = if node.config.trans_a != 0 { B::float_swap_dims(a, 0, 1) } else { a };
-    let b = if node.config.trans_b != 0 { B::float_swap_dims(b, 0, 1) } else { b };
+    let a = if node.config.trans_a != 0 {
+        B::float_swap_dims(a, 0, 1)
+    } else {
+        a
+    };
+    let b = if node.config.trans_b != 0 {
+        B::float_swap_dims(b, 0, 1)
+    } else {
+        b
+    };
 
     let mut y = B::float_matmul(a, b);
 
@@ -64,7 +76,9 @@ pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) {
         let c = if !c_arg.name.is_empty() {
             ctx.get(&c_arg.name)
         } else {
-            c_arg.value().map(|d| B::float_from_data(d, &default_device()))
+            c_arg
+                .value()
+                .map(|d| B::float_from_data(d, &default_device()))
         };
         if let Some(c) = c {
             let c = if node.config.beta != 1.0 {

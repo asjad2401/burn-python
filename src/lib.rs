@@ -1,8 +1,8 @@
 use numpy::{PyArrayDyn, PyReadonlyArrayDyn};
 use pyo3::prelude::*;
 
-mod tensor;
 mod interpreter;
+mod tensor;
 
 use interpreter::OnnxModel;
 
@@ -19,8 +19,7 @@ fn roundtrip<'py>(
 /// Load an ONNX model from a file path.
 #[pyfunction]
 fn load_onnx(path: &str) -> PyResult<OnnxModel> {
-    interpreter::load_onnx(path)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+    interpreter::load_onnx(path).map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
 #[pymodule]

@@ -1,7 +1,7 @@
-use burn_backend::backend::ops::FloatTensorOps;
-use onnx_ir::arithmetic::{AddNode, SubNode, MulNode, DivNode};
-use crate::tensor::B;
 use super::super::context::ExecutionContext;
+use crate::tensor::B;
+use burn_backend::backend::ops::FloatTensorOps;
+use onnx_ir::arithmetic::{AddNode, DivNode, MulNode, SubNode};
 
 pub fn add(node: &AddNode, ctx: &mut ExecutionContext) {
     let a = ctx.get(&node.inputs[0].name).expect("add: missing lhs");
