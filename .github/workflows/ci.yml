@@ -64,17 +64,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Create virtualenv
+        run: python -m venv .venv
+
       - name: Install Python deps
-        run: pip install maturin numpy onnx onnxruntime
+        run: .venv/bin/pip install maturin numpy onnx onnxruntime
 
       - name: Build extension
-        run: maturin develop --release
+        run: source .venv/bin/activate && maturin develop --release
 
       - name: Generate test fixtures
-        run: python tests/make_test_model.py
+        run: .venv/bin/python tests/make_test_model.py
 
       - name: Run tensor bridge tests
-        run: python tests/test_bridge.py
+        run: .venv/bin/python tests/test_bridge.py
 
       - name: Run ORT comparison tests
-        run: python tests/compare_ort.py
+        run: .venv/bin/python tests/compare_ort.py
