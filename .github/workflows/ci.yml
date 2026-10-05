@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # all PRs, so stacked PRs (based on another branch) get checked too
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -81,3 +81,6 @@ jobs:
 
       - name: Run ORT comparison tests
         run: .venv/bin/python tests/compare_ort.py
+
+      - name: Run op edge-case tests
+        run: .venv/bin/python tests/test_ops.py

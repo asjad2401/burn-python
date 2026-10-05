@@ -138,6 +138,22 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
         .parse_file(path)
         .map_err(|e| e.to_string())?;
 
+    // fail fast: a skipped op would only surface later as a missing tensor or wrong output
+    let mut unsupported: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter(|n| !is_supported(n))
+        .map(op_type)
+        .collect();
+    if !unsupported.is_empty() {
+        unsupported.sort();
+        unsupported.dedup();
+        return Err(format!(
+            "unsupported ONNX op(s): {}",
+            unsupported.join(", ")
+        ));
+    }
+
     let mut weights = HashMap::new();
 
     // pass 1: load all named static weights
@@ -167,6 +183,40 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
     })
 }
 
+// keep in sync with `dispatch`
+fn is_supported(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Relu(_)
+            | Node::Sigmoid(_)
+            | Node::Tanh(_)
+            | Node::Gelu(_)
+            | Node::Softmax(_)
+            | Node::LogSoftmax(_)
+            | Node::Linear(_)
+            | Node::Gemm(_)
+            | Node::Add(_)
+            | Node::Sub(_)
+            | Node::Mul(_)
+            | Node::Div(_)
+            | Node::Reshape(_)
+            | Node::Flatten(_)
+            | Node::Transpose(_)
+            | Node::Conv2d(_)
+            | Node::BatchNormalization(_)
+            | Node::MaxPool2d(_)
+            | Node::AveragePool2d(_)
+            | Node::GlobalAveragePool(_)
+            | Node::Constant(_)
+    )
+}
+
+/// Op type of a node (the enum variant name, e.g. "MatMul"), for error messages.
+fn op_type(node: &Node) -> String {
+    let dbg = format!("{node:?}");
+    dbg.split('(').next().unwrap_or(&dbg).to_string()
+}
+
 fn dispatch(node: &Node, ctx: &mut ExecutionContext) {
     match node {
         Node::Relu(n) => ops::activation::relu(n, ctx),
@@ -190,8 +240,7 @@ fn dispatch(node: &Node, ctx: &mut ExecutionContext) {
         Node::AveragePool2d(n) => ops::pool::avg_pool2d(n, ctx),
         Node::GlobalAveragePool(n) => ops::pool::global_avg_pool(n, ctx),
         Node::Constant(_) => {}
-        other => {
-            eprintln!("warn: unimplemented op '{}' — skipping", other.name());
-        }
+        // rejected by `is_supported` at load time
+        other => unreachable!("unsupported op '{}'", op_type(other)),
     }
 }

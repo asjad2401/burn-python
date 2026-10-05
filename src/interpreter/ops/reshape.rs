@@ -1,39 +1,43 @@
 use super::super::context::ExecutionContext;
 use crate::tensor::B;
 use burn_backend::{TensorMetadata, backend::ops::FloatTensorOps};
-use onnx_ir::{flatten::FlattenNode, reshape::ReshapeNode, transpose::TransposeNode};
+use onnx_ir::{
+    flatten::FlattenNode,
+    reshape::{ReshapeInput, ReshapeNode},
+    transpose::TransposeNode,
+};
 
 pub fn reshape(node: &ReshapeNode, ctx: &mut ExecutionContext) {
     let x = ctx
         .get(&node.inputs[0].name)
         .expect("reshape: missing input");
     let orig_shape: Vec<usize> = x.shape().iter().copied().collect();
-    let total: usize = orig_shape.iter().product();
 
-    let shape_data = node.inputs[1]
-        .value()
-        .expect("reshape: shape must be static");
-    let raw: Vec<i64> = shape_data.to_vec().expect("reshape: shape must be i64");
+    // shape comes from the attribute (opset < 5) or a constant input (opset 5+)
+    let raw: Vec<i64> = match &node.config.shape {
+        ReshapeInput::Static(shape) => shape.clone(),
+        ReshapeInput::Runtime(r) => node.inputs[r.input_index]
+            .value()
+            .expect("reshape: shape must be static")
+            .to_vec()
+            .expect("reshape: shape must be i64"),
+    };
 
-    let shape: Vec<usize> = raw
+    // 0 copies the input dim (allowzero=0); -1 is inferred from what's left
+    let mut shape: Vec<usize> = raw
         .iter()
         .enumerate()
-        .map(|(i, &s)| {
-            if s == -1 {
-                let known: usize = raw
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, v)| *j != i && **v != -1)
-                    .map(|(_, &v)| v as usize)
-                    .product();
-                total / known
-            } else if s == 0 {
-                orig_shape[i]
-            } else {
-                s as usize
-            }
+        .map(|(i, &s)| match s {
+            0 => orig_shape[i],
+            -1 => 1,
+            s => s as usize,
         })
         .collect();
+    if let Some(i) = raw.iter().position(|&s| s == -1) {
+        let total: usize = orig_shape.iter().product();
+        let known: usize = shape.iter().product();
+        shape[i] = total / known;
+    }
 
     ctx.insert(
         node.outputs[0].name.clone(),
