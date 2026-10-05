@@ -84,3 +84,44 @@ jobs:
 
       - name: Run op edge-case tests
         run: .venv/bin/python tests/test_ops.py
+
+  resnet18-e2e:
+    name: resnet18 end-to-end
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Model Zoo downloads, torch exports and torchvision weights (~200 MB total)
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/models
+            ~/.cache/torch
+          key: resnet18-models-v1
+
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Install Python deps
+        run: |
+          .venv/bin/pip install maturin numpy onnx onnxruntime onnxscript
+          .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build extension
+        run: source .venv/bin/activate && maturin develop --release
+
+      - name: Run ResNet-18 tests
+        run: .venv/bin/python tests/test_resnet.py --bench

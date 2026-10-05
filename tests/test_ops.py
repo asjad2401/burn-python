@@ -91,6 +91,69 @@ compare("avgpool asymmetric excl pad",
 compare("avgpool SAME_LOWER s2",
         pool("AveragePool", auto_pad="SAME_LOWER", strides=[2, 2]), X)
 
+# ── batchnorm (folded into conv where possible) ───────────────────────────────
+
+print("\n=== batchnorm ===")
+
+def graph_model(name, nodes, x_shape, initializers, outputs=("y",)):
+    graph = helper.make_graph(
+        nodes, name,
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, list(x_shape))],
+        [helper.make_tensor_value_info(o, TensorProto.FLOAT, None) for o in outputs],
+        initializer=list(initializers),
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 10
+    path = os.path.join(tmpdir, f"{name}.onnx")
+    onnx.save(model, path)
+    return path
+
+def compare_graph(label, nodes, x_shape, initializers, outputs=("y",), n_nodes=None):
+    path = graph_model(label.replace(" ", "_"), nodes, x_shape, initializers, outputs)
+    x = np.random.randn(*x_shape).astype(np.float32)
+    try:
+        model = burn.load_onnx(path)
+        if n_nodes is not None:  # e.g. BN folded away into the conv
+            check(f"{label}  runs {n_nodes} node(s)", f"nodes={n_nodes})" in repr(model))
+        got = model([x])
+    except BaseException as e:
+        check(f"{label}  ({type(e).__name__}: {e})", False)
+        return
+    want = ort.InferenceSession(path, providers=["CPUExecutionProvider"]).run(None, {"x": x})
+    ok = all(g.shape == w.shape and np.allclose(g, w, atol=1e-4) for g, w in zip(got, want))
+    diff = max(np.abs(g - w).max() for g, w in zip(got, want)) if ok else float("nan")
+    check(f"{label}  max_abs_diff={diff:.2e}", ok)
+
+def bn_params(c, prefix="bn"):
+    return [
+        numpy_helper.from_array(np.random.rand(c).astype(np.float32) + 0.5, f"{prefix}_g"),
+        numpy_helper.from_array(np.random.randn(c).astype(np.float32), f"{prefix}_b"),
+        numpy_helper.from_array(np.random.randn(c).astype(np.float32), f"{prefix}_m"),
+        numpy_helper.from_array(np.random.rand(c).astype(np.float32) + 0.5, f"{prefix}_v"),
+    ]
+
+def bn(x, y, prefix="bn"):
+    return helper.make_node("BatchNormalization",
+                            [x, f"{prefix}_g", f"{prefix}_b", f"{prefix}_m", f"{prefix}_v"], [y])
+
+compare_graph("conv+bn (folded)",
+              [helper.make_node("Conv", ["x", "W", "B"], ["c"], kernel_shape=[3, 3], pads=[1, 1, 1, 1]),
+               bn("c", "y")], X, [W, B] + bn_params(3), n_nodes=1)
+compare_graph("conv(no bias)+bn (folded)",
+              [helper.make_node("Conv", ["x", "W"], ["c"], kernel_shape=[3, 3]),
+               bn("c", "y")], X, [W] + bn_params(3), n_nodes=1)
+compare_graph("conv+bn, conv output reused (not folded)",
+              [helper.make_node("Conv", ["x", "W", "B"], ["c"], kernel_shape=[3, 3]),
+               bn("c", "n"), helper.make_node("Add", ["c", "n"], ["y"])], X, [W, B] + bn_params(3),
+              n_nodes=3)
+compare_graph("conv+bn, conv output is graph output (not folded)",
+              [helper.make_node("Conv", ["x", "W", "B"], ["c"], kernel_shape=[3, 3]),
+               bn("c", "y")], X, [W, B] + bn_params(3), outputs=("y", "c"), n_nodes=2)
+compare_graph("bn after relu (runtime path)",
+              [helper.make_node("Relu", ["x"], ["r"]), bn("r", "y", "bn2")], X, bn_params(2, "bn2"))
+compare_graph("bn on rank-2 input",
+              [bn("x", "y", "bn3")], (5, 4), bn_params(4, "bn3"))
+
 # ── reshape ──────────────────────────────────────────────────────────────────
 
 print("\n=== reshape ===")
@@ -105,6 +168,22 @@ node, init = reshape([0, 0, -1])
 compare("reshape [0, 0, -1]", node, (2, 3, 4), init)
 node, init = reshape([-1, 4])
 compare("reshape [-1, 4]", node, (2, 3, 4), init)
+
+# ── reductions ───────────────────────────────────────────────────────────────
+
+print("\n=== reductions ===")
+
+def reduce_node(op, axes, keepdims):
+    a = numpy_helper.from_array(np.array(axes, dtype=np.int64), "axes")
+    return helper.make_node(op, ["x", "axes"], ["y"], keepdims=keepdims), [a]
+
+for op in ["ReduceMean", "ReduceSum", "ReduceMax", "ReduceMin"]:
+    node, init = reduce_node(op, [-1, -2], 1)
+    compare(f"{op} axes=[-1,-2] keepdims=1", node, X, init, opset=18)
+    node, init = reduce_node(op, [1], 0)
+    compare(f"{op} axes=[1] keepdims=0", node, X, init, opset=18)
+compare("ReduceMean all axes keepdims=1",
+        helper.make_node("ReduceMean", ["x"], ["y"], keepdims=1), X, opset=18)
 
 # ── load errors ──────────────────────────────────────────────────────────────
 

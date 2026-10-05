@@ -24,9 +24,23 @@ currently supports:
 - **Activations**: Relu, Sigmoid, Tanh, Gelu, Softmax, LogSoftmax
 - **Elementwise**: Add, Sub, Mul, Div
 - **Shape ops**: Reshape, Flatten, Transpose
-- **Conv/pooling**: Conv2d, BatchNormalization (fused), MaxPool2d, AveragePool2d, GlobalAveragePool
+- **Conv/pooling**: Conv2d, BatchNormalization (folded into the preceding Conv when possible), MaxPool2d, AveragePool2d, GlobalAveragePool
+- **Reductions**: ReduceMean, ReduceSum, ReduceMax, ReduceMin
 
-Enough to run simple MLPs and small CNNs; more ops are being added incrementally.
+### Verified models
+
+ResNet-18 runs end to end and matches ONNX Runtime (max logit diff < 1e-5, same top-1)
+for the ONNX Model Zoo exports (`resnet18-v1-7`, `resnet18-v2-7`) and torchvision's
+`resnet18` exported with both `torch.onnx` exporters (legacy and dynamo).
+
+CPU latency vs ONNX Runtime (torchvision export, Apple M-series, 10 cores, median of 10):
+
+| batch | burn-python | ONNX Runtime |
+|------:|------------:|-------------:|
+| 1     | 22.6 ms     | 14.7 ms      |
+| 8     | 105.0 ms    | 118.5 ms     |
+
+More ops are being added incrementally.
 
 ## Building
 
@@ -42,6 +56,7 @@ python tests/make_test_model.py   # generates tests/mlp.onnx
 python tests/test_bridge.py       # numpy <-> Burn tensor bridge
 python tests/compare_ort.py       # correctness + perf vs ONNX Runtime
 python tests/test_ops.py          # op edge cases (padding, pooling, reshape) vs ORT
+python tests/test_resnet.py       # ResNet-18 end to end vs ORT (add --bench for timings)
 ```
 
 ## License

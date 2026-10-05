@@ -22,22 +22,17 @@ use pyo3::{
 };
 
 use crate::tensor::{B, FloatPrim, default_device, flex_to_numpy, numpy_to_flex};
-use context::{ExecutionContext, OpResult};
+use context::{ExecutionContext, OpResult, weight_key};
 
 fn load_weight(arg: &Argument) -> Option<(String, FloatPrim)> {
-    if arg.name.is_empty() {
-        return None;
-    }
     match arg.value_source {
         ValueSource::Static(_) | ValueSource::Constant => {
+            let key = weight_key(arg)?;
             let data = arg.value()?;
             if !matches!(data.dtype, DType::F32 | DType::F16 | DType::BF16) {
                 return None;
             }
-            Some((
-                arg.name.clone(),
-                B::float_from_data(data, &default_device()),
-            ))
+            Some((key, B::float_from_data(data, &default_device())))
         }
         _ => None,
     }
@@ -56,14 +51,7 @@ fn precompute_bn(
     };
 
     // all params must be pre-loaded (static/constant)
-    let get = |arg: &Argument| -> Option<FloatPrim> {
-        if !arg.name.is_empty() {
-            weights.get(&arg.name).cloned()
-        } else {
-            arg.value()
-                .map(|d| B::float_from_data(d, &default_device()))
-        }
-    };
+    let get = |arg: &Argument| weights.get(&weight_key(arg)?).cloned();
 
     let gamma = get(&node.inputs[1])?;
     let beta = get(&node.inputs[2])?;
@@ -84,6 +72,95 @@ fn precompute_bn(
     let offset = B::float_reshape(offset_flat, shape_4d.into());
 
     Some((node.name.clone(), scale, offset))
+}
+
+/// Fold each BatchNorm that directly follows a Conv2d into the conv's weight and bias:
+///   W' = W * scale[c_out],  b' = b * scale + offset
+/// then drop the BN node and have the conv write the BN's output directly.
+/// Only done when the conv output feeds nothing but that BN, and the BN's scale/offset
+/// were pre-computed (`precompute_bn`). Unfolded BNs keep the runtime mul + add path.
+fn fold_conv_bn(
+    mut nodes: Vec<Node>,
+    weights: &mut HashMap<String, FloatPrim>,
+    graph_outputs: &[String],
+) -> Vec<Node> {
+    let mut consumers: HashMap<String, usize> = HashMap::new();
+    for name in nodes
+        .iter()
+        .flat_map(|n| n.inputs().iter().map(|a| &a.name))
+        .chain(graph_outputs)
+    {
+        *consumers.entry(name.clone()).or_default() += 1;
+    }
+    let conv_by_output: HashMap<String, usize> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| matches!(n, Node::Conv2d(_)))
+        .map(|(i, n)| (n.outputs()[0].name.clone(), i))
+        .collect();
+
+    let mut folded = Vec::new(); // (conv index, bn index)
+    for (j, node) in nodes.iter().enumerate() {
+        let Node::BatchNormalization(bn) = node else {
+            continue;
+        };
+        let x = &bn.inputs[0].name;
+        let (Some(&i), Some(1)) = (conv_by_output.get(x), consumers.get(x)) else {
+            continue;
+        };
+        let Node::Conv2d(conv) = &nodes[i] else {
+            continue;
+        };
+        let (Some(scale), Some(offset), Some(w)) = (
+            weights.get(&format!("{}::scale", bn.name)).cloned(),
+            weights.get(&format!("{}::offset", bn.name)).cloned(),
+            weight_key(&conv.inputs[1]).and_then(|k| weights.get(&k).cloned()),
+        ) else {
+            continue;
+        };
+        let c_out = w.shape()[0];
+        let bias = match conv.inputs.get(2) {
+            Some(arg) => match weight_key(arg).and_then(|k| weights.get(&k).cloned()) {
+                Some(b) => b,
+                None => continue, // dynamic bias: leave unfolded
+            },
+            None => B::float_from_data(TensorData::zeros::<f32, _>([c_out]), &default_device()),
+        };
+
+        let w = B::float_mul(
+            w,
+            B::float_reshape(scale.clone(), vec![c_out, 1, 1, 1].into()),
+        );
+        let b = B::float_add(
+            B::float_mul(bias, B::float_reshape(scale, vec![c_out].into())),
+            B::float_reshape(offset, vec![c_out].into()),
+        );
+        weights.insert(format!("{}::folded_weight", conv.name), w);
+        weights.insert(format!("{}::folded_bias", conv.name), b);
+        folded.push((i, j));
+    }
+
+    for &(i, j) in &folded {
+        let bn_out = nodes[j].outputs()[0].name.clone();
+        let Node::Conv2d(conv) = &mut nodes[i] else {
+            unreachable!()
+        };
+        // point the conv at the folded params (static args are looked up by name first)
+        let mut w_arg = conv.inputs[1].clone();
+        w_arg.name = format!("{}::folded_weight", conv.name);
+        let mut b_arg = w_arg.clone();
+        b_arg.name = format!("{}::folded_bias", conv.name);
+        conv.inputs.truncate(1);
+        conv.inputs.extend([w_arg, b_arg]);
+        conv.outputs[0].name = bn_out;
+    }
+    let dropped: std::collections::HashSet<usize> = folded.iter().map(|&(_, j)| j).collect();
+    nodes
+        .into_iter()
+        .enumerate()
+        .filter(|(j, _)| !dropped.contains(j))
+        .map(|(_, n)| n)
+        .collect()
 }
 
 /// A graph input, with whatever shape info the model declares (None = symbolic dim).
@@ -274,10 +351,14 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
         }
     }
 
+    // pass 3: fold Conv -> BN pairs so those BNs cost nothing at inference time
+    let output_names: Vec<String> = graph.outputs.iter().map(|a| a.name.clone()).collect();
+    let nodes = fold_conv_bn(graph.nodes, &mut weights, &output_names);
+
     Ok(OnnxModel {
         inputs: graph.inputs.iter().map(InputSpec::from_arg).collect(),
-        output_names: graph.outputs.iter().map(|a| a.name.clone()).collect(),
-        nodes: graph.nodes,
+        output_names,
+        nodes,
         weights,
     })
 }
@@ -306,6 +387,10 @@ fn is_supported(node: &Node) -> bool {
             | Node::MaxPool2d(_)
             | Node::AveragePool2d(_)
             | Node::GlobalAveragePool(_)
+            | Node::ReduceMean(_)
+            | Node::ReduceSum(_)
+            | Node::ReduceMax(_)
+            | Node::ReduceMin(_)
             | Node::Constant(_)
     )
 }
@@ -338,6 +423,10 @@ fn dispatch(node: &Node, ctx: &mut ExecutionContext) -> OpResult {
         Node::MaxPool2d(n) => ops::pool::max_pool2d(n, ctx),
         Node::AveragePool2d(n) => ops::pool::avg_pool2d(n, ctx),
         Node::GlobalAveragePool(n) => ops::pool::global_avg_pool(n, ctx),
+        Node::ReduceMean(n) => ops::reduce::mean(n, ctx),
+        Node::ReduceSum(n) => ops::reduce::sum(n, ctx),
+        Node::ReduceMax(n) => ops::reduce::max(n, ctx),
+        Node::ReduceMin(n) => ops::reduce::min(n, ctx),
         Node::Constant(_) => Ok(()),
         // rejected by `is_supported` at load time
         other => Err(format!("unsupported op '{}'", op_type(other))),

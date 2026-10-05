@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- Static weights that onnx-ir passes as anonymous (unnamed) constants — including all
+  conv weights — are now pre-loaded once instead of converted on every forward pass.
+- BatchNormalization directly after a Conv2d is folded into the conv's weight and bias
+  at load time and removed from the graph. ResNet-18 (Model Zoo v1) at batch 8: 279 → 103 ms.
+
 ### Changed
 - Errors now surface as normal Python exceptions instead of `PanicException`:
   - `TypeError` for non-array / non-float32 inputs (with a `.astype(np.float32)` hint).
@@ -17,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set `RUST_BACKTRACE=1` to get it back.
 
 ### Fixed
+- BatchNormalization on non-4D inputs (e.g. `[N, C]` after a Linear) no longer
+  broadcasts to a 4D output; the pre-fused fast path is only used for NCHW.
 - Fortran-ordered inputs (e.g. `x.T`) were read in memory order, silently scrambling data.
   Non-C-contiguous arrays are now copied in logical order.
 - Conv2d / MaxPool2d / AveragePool2d with asymmetric pads no longer average the two
@@ -29,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being skipped with a warning and failing (or silently misbehaving) at inference time.
 
 ### Added
+- ReduceMean, ReduceSum, ReduceMax, ReduceMin (needed by the torch dynamo exporter's
+  global average pooling).
+- `tests/test_resnet.py`: ResNet-18 end to end vs ONNX Runtime on Model Zoo and
+  torchvision (legacy + dynamo) exports, with optional `--bench`; run in CI.
 - `tests/test_ops.py`: per-op edge-case tests against ONNX Runtime, run in CI.
 - ONNX interpreter support for Conv2d, fused BatchNormalization, MaxPool2d,
   AveragePool2d, and GlobalAveragePool.

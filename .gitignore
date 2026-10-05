@@ -9,3 +9,4 @@ Cargo.lock
 .claude/
 tests/*.onnx
 tests/*.npy
+tests/models/

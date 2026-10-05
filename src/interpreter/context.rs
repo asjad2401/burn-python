@@ -8,6 +8,17 @@ use onnx_ir::ir::{Argument, ValueSource};
 
 use crate::tensor::{B, FloatPrim, default_device};
 
+/// Key a static/constant argument is pre-loaded under in the weights map.
+/// onnx-ir often hands initializers over as anonymous statics (name ""), so those
+/// are keyed by their data id instead.
+pub fn weight_key(arg: &Argument) -> Option<String> {
+    match arg.value_source {
+        _ if !arg.name.is_empty() => Some(arg.name.clone()),
+        ValueSource::Static(id) => Some(format!("static::{id}")),
+        _ => None,
+    }
+}
+
 /// Ops report failures as a message; the interpreter adds node context.
 pub type OpResult = Result<(), String>;
 
@@ -37,22 +48,18 @@ impl<'w> ExecutionContext<'w> {
 
     /// Resolve any Argument to a FloatPrim:
     ///   - Dynamic/named Constant → look up by name
-    ///   - Static with empty name → convert inline TensorData directly
+    ///   - Static → pre-loaded weight (see `weight_key`), else convert inline data
     ///   - Optional/missing → None
     pub fn resolve(&self, arg: &Argument) -> Option<FloatPrim> {
         match arg.value_source {
             ValueSource::Dynamic | ValueSource::Constant => self.get(&arg.name),
-            ValueSource::Static(_) => {
-                if !arg.name.is_empty() {
-                    // pre-loaded by name
-                    if let Some(t) = self.get(&arg.name) {
-                        return Some(t);
-                    }
-                }
-                // anonymous inline static — convert on the fly
-                arg.value()
-                    .map(|d| B::float_from_data(d, &default_device()))
-            }
+            ValueSource::Static(_) => weight_key(arg)
+                .and_then(|key| self.weights.get(&key).cloned())
+                // not pre-loaded (e.g. non-float data) — convert on the fly
+                .or_else(|| {
+                    arg.value()
+                        .map(|d| B::float_from_data(d, &default_device()))
+                }),
             ValueSource::Optional => None,
         }
     }
