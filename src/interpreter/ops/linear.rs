@@ -1,15 +1,11 @@
-use super::super::context::ExecutionContext;
+use super::super::context::{ExecutionContext, OpResult};
 use crate::tensor::{B, default_device};
 use burn_backend::backend::ops::FloatTensorOps;
 use onnx_ir::{gemm::GemmNode, linear::LinearNode};
 
-pub fn linear(node: &LinearNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .get(&node.inputs[0].name)
-        .expect("linear: missing input");
-    let w = ctx
-        .get(&node.inputs[1].name)
-        .expect("linear: missing weight");
+pub fn linear(node: &LinearNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
+    let w = ctx.require(&node.inputs[1])?;
 
     // Gemm layout: w is [out, in], needs transpose before matmul
     // MatMul layout: w is [in, out], use as-is
@@ -43,13 +39,14 @@ pub fn linear(node: &LinearNode, ctx: &mut ExecutionContext) {
     };
 
     ctx.insert(node.outputs[0].name.clone(), y);
+    Ok(())
 }
 
 // General matrix multiply: Y = alpha * A' * B' + beta * C
 // In practice alpha=1, beta=1 for neural net layers.
-pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) {
-    let a = ctx.get(&node.inputs[0].name).expect("gemm: missing A");
-    let b = ctx.get(&node.inputs[1].name).expect("gemm: missing B");
+pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) -> OpResult {
+    let a = ctx.require(&node.inputs[0])?;
+    let b = ctx.require(&node.inputs[1])?;
 
     let a = if node.config.trans_a != 0 {
         B::float_swap_dims(a, 0, 1)
@@ -95,4 +92,5 @@ pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) {
     }
 
     ctx.insert(node.outputs[0].name.clone(), y);
+    Ok(())
 }

@@ -117,6 +117,43 @@ try:
 except RuntimeError as e:
     check(f"unsupported op raises at load  ({e})", "Exp" in str(e))
 
+def raises(label, fn, exc, *needles):
+    try:
+        fn()
+        check(f"{label}  (no exception)", False)
+    except exc as e:
+        check(f"{label}  ({type(e).__name__}: {e})", all(n in str(e) for n in needles))
+    except BaseException as e:  # e.g. pyo3 PanicException
+        check(f"{label}  (wrong exception {type(e).__name__}: {e})", False)
+
+# ── inference errors ─────────────────────────────────────────────────────────
+
+print("\n=== inference errors ===")
+
+relu = burn.load_onnx(save_model("relu", helper.make_node("Relu", ["x"], ["y"]), ("N", 3)))
+raises("float64 input", lambda: relu([np.zeros((2, 3))]), TypeError, "float32", "float64")
+raises("non-array input", lambda: relu([[1.0, 2.0, 3.0]]), TypeError, "numpy array")
+raises("wrong rank", lambda: relu([np.zeros((2, 3, 1), np.float32)]), ValueError, "[?, 3]")
+raises("wrong static dim", lambda: relu([np.zeros((2, 4), np.float32)]), ValueError, "[?, 3]")
+raises("wrong input count", lambda: relu([]), ValueError, "expected 1 input")
+
+# shape mismatch caught inside the backend: Gemm with an input whose inner dim
+# doesn't match W, declared as fully dynamic so the input check lets it through
+gemm_w = numpy_helper.from_array(np.ones((4, 2), np.float32), "W")
+gemm = burn.load_onnx(save_model(
+    "gemm_dyn", helper.make_node("Gemm", ["x", "W"], ["y"]), ("N", "K"), [gemm_w]))
+raises("backend panic -> RuntimeError with node context",
+       lambda: gemm([np.zeros((2, 3), np.float32)]), RuntimeError, "(Gemm)", "inner dimensions")
+
+# ── non-contiguous inputs ────────────────────────────────────────────────────
+
+print("\n=== non-contiguous inputs ===")
+
+x = np.random.randn(3, 4).astype(np.float32)
+for label, view in [("transposed (F-order)", x.T), ("strided slice", x[:, ::2].T),
+                    ("negative stride", np.ascontiguousarray(x.T)[::-1])]:
+    check(label, np.array_equal(relu([view])[0], np.maximum(view, 0)))
+
 print()
 
 if failures:
