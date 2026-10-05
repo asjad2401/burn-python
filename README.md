@@ -41,6 +41,7 @@ maturin develop --release
 python tests/make_test_model.py   # generates tests/mlp.onnx
 python tests/test_bridge.py       # numpy <-> Burn tensor bridge
 python tests/compare_ort.py       # correctness + perf vs ONNX Runtime
+python tests/test_ops.py          # op edge cases (padding, pooling, reshape) vs ORT
 ```
 
 ## License

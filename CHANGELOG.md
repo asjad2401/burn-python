@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Conv2d / MaxPool2d / AveragePool2d with asymmetric pads no longer average the two
+  sides; uneven pads are applied to the input explicitly (exact for `count_include_pad=0`).
+- `auto_pad=SAME_UPPER` / `SAME_LOWER` / `VALID` are now honoured instead of treated as no padding.
+- Pooling now respects `ceil_mode`.
+- Reshape with both `0` and `-1` in the target shape no longer panics (divide by zero),
+  and the opset < 5 `shape` attribute form is supported.
+- Unsupported ops now fail at `load_onnx` with a list of the missing ops, instead of
+  being skipped with a warning and failing (or silently misbehaving) at inference time.
+
 ### Added
+- `tests/test_ops.py`: per-op edge-case tests against ONNX Runtime, run in CI.
 - ONNX interpreter support for Conv2d, fused BatchNormalization, MaxPool2d,
   AveragePool2d, and GlobalAveragePool.
 - GitHub Actions CI: `cargo build`, `cargo fmt` / `cargo clippy` (non-blocking),

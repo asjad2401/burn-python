@@ -81,3 +81,6 @@ jobs:
 
       - name: Run ORT comparison tests
         run: .venv/bin/python tests/compare_ort.py
+
+      - name: Run op edge-case tests
+        run: .venv/bin/python tests/test_ops.py

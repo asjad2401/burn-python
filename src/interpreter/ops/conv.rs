@@ -1,4 +1,5 @@
 use super::super::context::ExecutionContext;
+use super::padding::{pad2d, resolve_pads, symmetric};
 use crate::tensor::{B, default_device};
 use burn_backend::{
     TensorData, TensorMetadata,
@@ -8,17 +9,7 @@ use burn_backend::{
 use onnx_ir::{
     batch_norm::{BatchNormConfig, BatchNormalizationNode},
     conv2d::Conv2dNode,
-    node::padding::PaddingConfig2d,
 };
-
-fn symmetric_padding(cfg: &PaddingConfig2d) -> [usize; 2] {
-    match cfg {
-        PaddingConfig2d::Valid => [0, 0],
-        PaddingConfig2d::Explicit(top, left, bottom, right) => {
-            [(top + bottom) / 2, (left + right) / 2]
-        }
-    }
-}
 
 pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
     let x = ctx.resolve(&node.inputs[0]).expect("conv2d: missing input");
@@ -27,7 +18,21 @@ pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
         .expect("conv2d: missing weight");
     let bias = node.inputs.get(2).and_then(|a| ctx.resolve(a));
 
-    let pad = symmetric_padding(&node.config.padding);
+    let cfg = &node.config;
+    let pads = resolve_pads(
+        &x,
+        &cfg.padding,
+        &cfg.auto_pad,
+        cfg.kernel_size,
+        cfg.stride,
+        cfg.dilation,
+    );
+    // uneven pads: zero-pad the input up front and run the conv unpadded
+    let (x, pad) = match symmetric(pads) {
+        Some(pad) => (x, pad),
+        None => (pad2d(x, pads, 0.0), [0, 0]),
+    };
+
     let options = ConvOptions::new(
         node.config.stride,
         pad,

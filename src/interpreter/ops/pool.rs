@@ -1,32 +1,40 @@
 use super::super::context::ExecutionContext;
-use crate::tensor::B;
-use burn_backend::backend::ops::ModuleOps;
+use super::padding::{pad2d, resolve_pads, symmetric};
+use crate::tensor::{B, default_device};
+use burn_backend::{
+    TensorData, TensorMetadata,
+    backend::ops::{FloatTensorOps, ModuleOps},
+};
 use onnx_ir::{
     avg_pool2d::AveragePool2dNode, global_avg_pool::GlobalAveragePoolNode,
-    max_pool2d::MaxPool2dNode, node::padding::PaddingConfig2d,
+    max_pool2d::MaxPool2dNode,
 };
-
-fn symmetric_padding(cfg: &PaddingConfig2d) -> [usize; 2] {
-    match cfg {
-        PaddingConfig2d::Valid => [0, 0],
-        PaddingConfig2d::Explicit(top, left, bottom, right) => {
-            [(top + bottom) / 2, (left + right) / 2]
-        }
-    }
-}
 
 pub fn max_pool2d(node: &MaxPool2dNode, ctx: &mut ExecutionContext) {
     let x = ctx
         .resolve(&node.inputs[0])
         .expect("max_pool2d: missing input");
-    let pad = symmetric_padding(&node.config.padding);
+    let cfg = &node.config;
+    let pads = resolve_pads(
+        &x,
+        &cfg.padding,
+        &cfg.auto_pad,
+        cfg.kernel_size,
+        cfg.strides,
+        cfg.dilation,
+    );
+    // uneven pads: -inf padding never wins the max, so pre-padding is exact
+    let (x, pad) = match symmetric(pads) {
+        Some(pad) => (x, pad),
+        None => (pad2d(x, pads, f32::NEG_INFINITY), [0, 0]),
+    };
     let y = B::max_pool2d(
         x,
-        node.config.kernel_size,
-        node.config.strides,
+        cfg.kernel_size,
+        cfg.strides,
         pad,
-        node.config.dilation,
-        false,
+        cfg.dilation,
+        cfg.ceil_mode,
     );
     ctx.insert(node.outputs[0].name.clone(), y);
 }
@@ -35,15 +43,42 @@ pub fn avg_pool2d(node: &AveragePool2dNode, ctx: &mut ExecutionContext) {
     let x = ctx
         .resolve(&node.inputs[0])
         .expect("avg_pool2d: missing input");
-    let pad = symmetric_padding(&node.config.padding);
-    let y = B::avg_pool2d(
-        x,
-        node.config.kernel_size,
-        node.config.strides,
-        pad,
-        node.config.count_include_pad,
-        false,
+    let cfg = &node.config;
+    let pads = resolve_pads(
+        &x,
+        &cfg.padding,
+        &cfg.auto_pad,
+        cfg.kernel_size,
+        cfg.strides,
+        cfg.dilation,
     );
+    let pool = |t, pad, include_pad| {
+        B::avg_pool2d(
+            t,
+            cfg.kernel_size,
+            cfg.strides,
+            pad,
+            include_pad,
+            cfg.ceil_mode,
+        )
+    };
+
+    let y = match symmetric(pads) {
+        Some(pad) => pool(x, pad, cfg.count_include_pad),
+        None if cfg.count_include_pad => pool(pad2d(x, pads, 0.0), [0, 0], true),
+        None => {
+            // uneven pads that must not count towards the average:
+            // sum(window) / count(real pixels in window), via a padded ones-mask
+            let shape = x.shape();
+            let ones = B::float_from_data(
+                TensorData::full(vec![1, 1, shape[2], shape[3]], 1.0f32),
+                &default_device(),
+            );
+            let sum = pool(pad2d(x, pads, 0.0), [0, 0], true);
+            let count = pool(pad2d(ones, pads, 0.0), [0, 0], true);
+            B::float_div(sum, count)
+        }
+    };
     ctx.insert(node.outputs[0].name.clone(), y);
 }
 
