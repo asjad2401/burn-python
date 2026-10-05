@@ -33,6 +33,8 @@ graph = helper.make_graph(
 )
 
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+# pin the IR version: new onnx releases can write IR versions onnxruntime can't read yet
+model.ir_version = 10
 onnx.save(model, "tests/mlp.onnx")
 print("saved tests/mlp.onnx")
 
