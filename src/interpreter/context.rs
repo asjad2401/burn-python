@@ -8,6 +8,9 @@ use onnx_ir::ir::{Argument, ValueSource};
 
 use crate::tensor::{B, FloatPrim, default_device};
 
+/// Ops report failures as a message; the interpreter adds node context.
+pub type OpResult = Result<(), String>;
+
 pub struct ExecutionContext<'w> {
     tensors: HashMap<String, FloatPrim>,
     weights: &'w HashMap<String, FloatPrim>,
@@ -52,5 +55,11 @@ impl<'w> ExecutionContext<'w> {
             }
             ValueSource::Optional => None,
         }
+    }
+
+    /// Like `resolve`, but a missing tensor is an error rather than `None`.
+    pub fn require(&self, arg: &Argument) -> Result<FloatPrim, String> {
+        self.resolve(arg)
+            .ok_or_else(|| format!("missing input tensor '{}'", arg.name))
     }
 }

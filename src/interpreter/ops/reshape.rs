@@ -1,4 +1,4 @@
-use super::super::context::ExecutionContext;
+use super::super::context::{ExecutionContext, OpResult};
 use crate::tensor::B;
 use burn_backend::{TensorMetadata, backend::ops::FloatTensorOps};
 use onnx_ir::{
@@ -7,10 +7,8 @@ use onnx_ir::{
     transpose::TransposeNode,
 };
 
-pub fn reshape(node: &ReshapeNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .get(&node.inputs[0].name)
-        .expect("reshape: missing input");
+pub fn reshape(node: &ReshapeNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let orig_shape: Vec<usize> = x.shape().iter().copied().collect();
 
     // shape comes from the attribute (opset < 5) or a constant input (opset 5+)
@@ -18,9 +16,9 @@ pub fn reshape(node: &ReshapeNode, ctx: &mut ExecutionContext) {
         ReshapeInput::Static(shape) => shape.clone(),
         ReshapeInput::Runtime(r) => node.inputs[r.input_index]
             .value()
-            .expect("reshape: shape must be static")
+            .ok_or("shape must be a constant (dynamic shapes are not supported yet)")?
             .to_vec()
-            .expect("reshape: shape must be i64"),
+            .map_err(|e| format!("shape must be int64: {e:?}"))?,
     };
 
     // 0 copies the input dim (allowzero=0); -1 is inferred from what's left
@@ -43,12 +41,11 @@ pub fn reshape(node: &ReshapeNode, ctx: &mut ExecutionContext) {
         node.outputs[0].name.clone(),
         B::float_reshape(x, shape.into()),
     );
+    Ok(())
 }
 
-pub fn flatten(node: &FlattenNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .get(&node.inputs[0].name)
-        .expect("flatten: missing input");
+pub fn flatten(node: &FlattenNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let shape: Vec<usize> = x.shape().iter().copied().collect();
     let axis = node.config.axis;
     let outer: usize = shape[..axis].iter().product::<usize>().max(1);
@@ -57,12 +54,11 @@ pub fn flatten(node: &FlattenNode, ctx: &mut ExecutionContext) {
         node.outputs[0].name.clone(),
         B::float_reshape(x, vec![outer, inner].into()),
     );
+    Ok(())
 }
 
-pub fn transpose(node: &TransposeNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .get(&node.inputs[0].name)
-        .expect("transpose: missing input");
+pub fn transpose(node: &TransposeNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let rank = x.shape().num_dims();
 
     let perm: Vec<usize> = if node.config.perm.is_empty() {
@@ -72,4 +68,5 @@ pub fn transpose(node: &TransposeNode, ctx: &mut ExecutionContext) {
     };
 
     ctx.insert(node.outputs[0].name.clone(), B::float_permute(x, &perm));
+    Ok(())
 }

@@ -1,4 +1,4 @@
-use super::super::context::ExecutionContext;
+use super::super::context::{ExecutionContext, OpResult};
 use super::padding::{pad2d, resolve_pads, symmetric};
 use crate::tensor::{B, default_device};
 use burn_backend::{
@@ -11,11 +11,9 @@ use onnx_ir::{
     conv2d::Conv2dNode,
 };
 
-pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
-    let x = ctx.resolve(&node.inputs[0]).expect("conv2d: missing input");
-    let w = ctx
-        .resolve(&node.inputs[1])
-        .expect("conv2d: missing weight");
+pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
+    let w = ctx.require(&node.inputs[1])?;
     let bias = node.inputs.get(2).and_then(|a| ctx.resolve(a));
 
     let cfg = &node.config;
@@ -41,14 +39,13 @@ pub fn conv2d(node: &Conv2dNode, ctx: &mut ExecutionContext) {
     );
 
     ctx.insert(node.outputs[0].name.clone(), B::conv2d(x, w, bias, options));
+    Ok(())
 }
 
 // BatchNorm dispatch — uses pre-fused scale/offset computed at load time.
 // Falls back to full computation if pre-fusion wasn't possible.
-pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .resolve(&node.inputs[0])
-        .expect("batch_norm: missing input");
+pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
 
     let scale_key = format!("{}::scale", node.name);
     let offset_key = format!("{}::offset", node.name);
@@ -60,18 +57,10 @@ pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContex
         ctx.insert(node.outputs[0].name.clone(), y);
     } else {
         // fallback: full manual BN (slow, but correct)
-        let gamma = ctx
-            .resolve(&node.inputs[1])
-            .expect("batch_norm: missing gamma");
-        let beta = ctx
-            .resolve(&node.inputs[2])
-            .expect("batch_norm: missing beta");
-        let mean = ctx
-            .resolve(&node.inputs[3])
-            .expect("batch_norm: missing mean");
-        let var = ctx
-            .resolve(&node.inputs[4])
-            .expect("batch_norm: missing var");
+        let gamma = ctx.require(&node.inputs[1])?;
+        let beta = ctx.require(&node.inputs[2])?;
+        let mean = ctx.require(&node.inputs[3])?;
+        let var = ctx.require(&node.inputs[4])?;
 
         let eps = match &node.config {
             BatchNormConfig::Static(c) => c.epsilon as f32,
@@ -91,4 +80,5 @@ pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContex
         let y = B::float_add(y, bcast(beta));
         ctx.insert(node.outputs[0].name.clone(), y);
     }
+    Ok(())
 }

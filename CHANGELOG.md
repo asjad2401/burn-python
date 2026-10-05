@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Errors now surface as normal Python exceptions instead of `PanicException`:
+  - `TypeError` for non-array / non-float32 inputs (with a `.astype(np.float32)` hint).
+  - `ValueError` for wrong input count, rank, or a static dim that doesn't match the model.
+  - `RuntimeError` naming the failing node and op (e.g. `node 'gemm1' (Gemm): ...`) for op
+    and backend failures, including panics raised inside Burn.
+- Rust panic output on stderr is suppressed (the message is in the exception);
+  set `RUST_BACKTRACE=1` to get it back.
+
 ### Fixed
+- Fortran-ordered inputs (e.g. `x.T`) were read in memory order, silently scrambling data.
+  Non-C-contiguous arrays are now copied in logical order.
 - Conv2d / MaxPool2d / AveragePool2d with asymmetric pads no longer average the two
   sides; uneven pads are applied to the input explicitly (exact for `count_include_pad=0`).
 - `auto_pad=SAME_UPPER` / `SAME_LOWER` / `VALID` are now honoured instead of treated as no padding.

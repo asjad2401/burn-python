@@ -11,7 +11,7 @@ use interpreter::OnnxModel;
 fn roundtrip<'py>(
     py: Python<'py>,
     arr: PyReadonlyArrayDyn<'py, f32>,
-) -> Bound<'py, PyArrayDyn<f32>> {
+) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
     let prim = tensor::numpy_to_flex(&arr);
     tensor::flex_to_numpy(py, prim)
 }
@@ -24,6 +24,11 @@ fn load_onnx(path: &str) -> PyResult<OnnxModel> {
 
 #[pymodule]
 fn _burn_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Panics inside ops are caught and re-raised as Python exceptions that carry the
+    // message, so the default hook's stderr dump is just noise. RUST_BACKTRACE keeps it.
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::panic::set_hook(Box::new(|_| {}));
+    }
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(load_onnx, m)?)?;

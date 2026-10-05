@@ -1,4 +1,4 @@
-use super::super::context::ExecutionContext;
+use super::super::context::{ExecutionContext, OpResult};
 use super::padding::{pad2d, resolve_pads, symmetric};
 use crate::tensor::{B, default_device};
 use burn_backend::{
@@ -10,10 +10,8 @@ use onnx_ir::{
     max_pool2d::MaxPool2dNode,
 };
 
-pub fn max_pool2d(node: &MaxPool2dNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .resolve(&node.inputs[0])
-        .expect("max_pool2d: missing input");
+pub fn max_pool2d(node: &MaxPool2dNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let cfg = &node.config;
     let pads = resolve_pads(
         &x,
@@ -37,12 +35,11 @@ pub fn max_pool2d(node: &MaxPool2dNode, ctx: &mut ExecutionContext) {
         cfg.ceil_mode,
     );
     ctx.insert(node.outputs[0].name.clone(), y);
+    Ok(())
 }
 
-pub fn avg_pool2d(node: &AveragePool2dNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .resolve(&node.inputs[0])
-        .expect("avg_pool2d: missing input");
+pub fn avg_pool2d(node: &AveragePool2dNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let cfg = &node.config;
     let pads = resolve_pads(
         &x,
@@ -80,12 +77,12 @@ pub fn avg_pool2d(node: &AveragePool2dNode, ctx: &mut ExecutionContext) {
         }
     };
     ctx.insert(node.outputs[0].name.clone(), y);
+    Ok(())
 }
 
-pub fn global_avg_pool(node: &GlobalAveragePoolNode, ctx: &mut ExecutionContext) {
-    let x = ctx
-        .resolve(&node.inputs[0])
-        .expect("global_avg_pool: missing input");
+pub fn global_avg_pool(node: &GlobalAveragePoolNode, ctx: &mut ExecutionContext) -> OpResult {
+    let x = ctx.require(&node.inputs[0])?;
     let y = B::adaptive_avg_pool2d(x, [1, 1]);
     ctx.insert(node.outputs[0].name.clone(), y);
+    Ok(())
 }

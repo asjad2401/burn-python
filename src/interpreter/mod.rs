@@ -5,18 +5,24 @@ mod context;
 pub mod ops;
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use burn_backend::{DType, TensorData, TensorMetadata, backend::ops::FloatTensorOps};
-use numpy::{PyArrayDyn, PyReadonlyArrayDyn};
+use numpy::{
+    PyArrayDyn, PyArrayMethods, PyReadonlyArrayDyn, PyUntypedArray, PyUntypedArrayMethods,
+};
 use onnx_ir::{
     Node, OnnxGraphBuilder,
     batch_norm::{BatchNormConfig, BatchNormalizationNode},
-    ir::{Argument, ValueSource},
+    ir::{ArgType, Argument, ValueSource},
 };
-use pyo3::prelude::*;
+use pyo3::{
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
+    prelude::*,
+};
 
 use crate::tensor::{B, FloatPrim, default_device, flex_to_numpy, numpy_to_flex};
-use context::ExecutionContext;
+use context::{ExecutionContext, OpResult};
 
 fn load_weight(arg: &Argument) -> Option<(String, FloatPrim)> {
     if arg.name.is_empty() {
@@ -80,11 +86,95 @@ fn precompute_bn(
     Some((node.name.clone(), scale, offset))
 }
 
+/// A graph input, with whatever shape info the model declares (None = symbolic dim).
+struct InputSpec {
+    name: String,
+    rank: Option<usize>,
+    shape: Option<Vec<Option<usize>>>,
+}
+
+impl InputSpec {
+    fn from_arg(arg: &Argument) -> Self {
+        let (rank, shape) = match &arg.ty {
+            ArgType::Tensor(t) => (Some(t.rank), t.static_shape.clone()),
+            _ => (None, None),
+        };
+        Self {
+            name: arg.name.clone(),
+            rank,
+            shape,
+        }
+    }
+
+    fn check_shape(&self, actual: &[usize]) -> PyResult<()> {
+        let mismatch = match &self.shape {
+            Some(dims) => {
+                dims.len() != actual.len()
+                    || dims
+                        .iter()
+                        .zip(actual)
+                        .any(|(d, a)| d.is_some_and(|d| d != *a))
+            }
+            None => self.rank.is_some_and(|r| r != actual.len()),
+        };
+        if !mismatch {
+            return Ok(());
+        }
+        let expected = match &self.shape {
+            Some(dims) => {
+                let dims: Vec<String> = dims
+                    .iter()
+                    .map(|d| d.map_or("?".to_string(), |d| d.to_string()))
+                    .collect();
+                format!("shape [{}]", dims.join(", "))
+            }
+            None => format!("{} dims", self.rank.unwrap_or_default()),
+        };
+        Err(PyValueError::new_err(format!(
+            "input '{}': expected {expected}, got shape {actual:?}",
+            self.name
+        )))
+    }
+}
+
+/// Accept only float32 ndarrays, with a hint on how to fix anything else.
+fn as_f32_array<'py>(
+    obj: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<PyReadonlyArrayDyn<'py, f32>> {
+    if let Ok(arr) = obj.cast::<PyArrayDyn<f32>>() {
+        return Ok(arr.readonly());
+    }
+    let msg = match obj.cast::<PyUntypedArray>() {
+        Ok(arr) => format!(
+            "input '{name}': expected a float32 array, got {} (use .astype(np.float32))",
+            arr.dtype()
+        ),
+        Err(_) => format!(
+            "input '{name}': expected a numpy array, got {}",
+            obj.get_type().name()?
+        ),
+    };
+    Err(PyTypeError::new_err(msg))
+}
+
+/// Run one node, turning both op errors and backend panics into a message.
+fn run_node(node: &Node, ctx: &mut ExecutionContext) -> OpResult {
+    catch_unwind(AssertUnwindSafe(|| dispatch(node, ctx))).unwrap_or_else(|payload| {
+        let msg = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown panic");
+        Err(msg.to_string())
+    })
+}
+
 #[pyclass]
 pub struct OnnxModel {
     nodes: Vec<Node>,
     weights: HashMap<String, FloatPrim>,
-    input_names: Vec<String>,
+    inputs: Vec<InputSpec>,
     output_names: Vec<String>,
 }
 
@@ -93,40 +183,49 @@ impl OnnxModel {
     fn __call__<'py>(
         &self,
         py: Python<'py>,
-        inputs: Vec<PyReadonlyArrayDyn<'py, f32>>,
+        inputs: Vec<Bound<'py, PyAny>>,
     ) -> PyResult<Vec<Bound<'py, PyArrayDyn<f32>>>> {
-        if inputs.len() != self.input_names.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+        if inputs.len() != self.inputs.len() {
+            return Err(PyValueError::new_err(format!(
                 "expected {} input(s), got {}",
-                self.input_names.len(),
+                self.inputs.len(),
                 inputs.len()
             )));
         }
 
         let mut ctx = ExecutionContext::new(&self.weights);
-        for (name, arr) in self.input_names.iter().zip(inputs) {
-            ctx.insert(name.clone(), numpy_to_flex(&arr));
+        for (spec, obj) in self.inputs.iter().zip(&inputs) {
+            let arr = as_f32_array(obj, &spec.name)?;
+            spec.check_shape(arr.shape())?;
+            ctx.insert(spec.name.clone(), numpy_to_flex(&arr));
         }
 
         for node in &self.nodes {
-            dispatch(node, &mut ctx);
+            run_node(node, &mut ctx).map_err(|msg| {
+                PyRuntimeError::new_err(format!(
+                    "node '{}' ({}): {msg}",
+                    node.name(),
+                    op_type(node)
+                ))
+            })?;
         }
 
         self.output_names
             .iter()
             .map(|name| {
-                let t = ctx
-                    .get(name)
-                    .unwrap_or_else(|| panic!("output '{}' not found", name));
-                Ok(flex_to_numpy(py, t))
+                let t = ctx.get(name).ok_or_else(|| {
+                    PyRuntimeError::new_err(format!("model output '{name}' was never computed"))
+                })?;
+                flex_to_numpy(py, t)
             })
             .collect()
     }
 
     fn __repr__(&self) -> String {
+        let input_names: Vec<&str> = self.inputs.iter().map(|i| i.name.as_str()).collect();
         format!(
             "OnnxModel(inputs={:?}, outputs={:?}, nodes={})",
-            self.input_names,
+            input_names,
             self.output_names,
             self.nodes.len()
         )
@@ -176,7 +275,7 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
     }
 
     Ok(OnnxModel {
-        input_names: graph.inputs.iter().map(|a| a.name.clone()).collect(),
+        inputs: graph.inputs.iter().map(InputSpec::from_arg).collect(),
         output_names: graph.outputs.iter().map(|a| a.name.clone()).collect(),
         nodes: graph.nodes,
         weights,
@@ -217,7 +316,7 @@ fn op_type(node: &Node) -> String {
     dbg.split('(').next().unwrap_or(&dbg).to_string()
 }
 
-fn dispatch(node: &Node, ctx: &mut ExecutionContext) {
+fn dispatch(node: &Node, ctx: &mut ExecutionContext) -> OpResult {
     match node {
         Node::Relu(n) => ops::activation::relu(n, ctx),
         Node::Sigmoid(n) => ops::activation::sigmoid(n, ctx),
@@ -239,8 +338,8 @@ fn dispatch(node: &Node, ctx: &mut ExecutionContext) {
         Node::MaxPool2d(n) => ops::pool::max_pool2d(n, ctx),
         Node::AveragePool2d(n) => ops::pool::avg_pool2d(n, ctx),
         Node::GlobalAveragePool(n) => ops::pool::global_avg_pool(n, ctx),
-        Node::Constant(_) => {}
+        Node::Constant(_) => Ok(()),
         // rejected by `is_supported` at load time
-        other => unreachable!("unsupported op '{}'", op_type(other)),
+        other => Err(format!("unsupported op '{}'", op_type(other))),
     }
 }
