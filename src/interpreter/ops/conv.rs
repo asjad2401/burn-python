@@ -50,7 +50,12 @@ pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContex
     let scale_key = format!("{}::scale", node.name);
     let offset_key = format!("{}::offset", node.name);
 
-    if let (Some(scale), Some(offset)) = (ctx.get(&scale_key), ctx.get(&offset_key)) {
+    // pre-fused scale/offset are shaped [1, C, 1, 1], so only valid for NCHW inputs
+    let fused = match x.shape().num_dims() {
+        4 => ctx.get(&scale_key).zip(ctx.get(&offset_key)),
+        _ => None,
+    };
+    if let Some((scale, offset)) = fused {
         // fast path: 2 ops, no reshape (scale/offset are already [1,C,1,1])
         let y = B::float_mul(x, scale);
         let y = B::float_add(y, offset);
