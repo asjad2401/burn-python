@@ -33,12 +33,17 @@ ResNet-18 runs end to end and matches ONNX Runtime (max logit diff < 1e-5, same 
 for the ONNX Model Zoo exports (`resnet18-v1-7`, `resnet18-v2-7`) and torchvision's
 `resnet18` exported with both `torch.onnx` exporters (legacy and dynamo).
 
-CPU latency vs ONNX Runtime (torchvision export, Apple M-series, 10 cores, median of 10):
+CPU latency vs ONNX Runtime (torchvision export, burn `flex` backend, median of 10 runs).
+Performance varies a lot by platform:
 
-| batch | burn-python | ONNX Runtime |
-|------:|------------:|-------------:|
-| 1     | 22.6 ms     | 14.7 ms      |
-| 8     | 105.0 ms    | 118.5 ms     |
+| platform | batch | burn-python | ONNX Runtime | burn / ORT |
+|----------|------:|------------:|-------------:|-----------:|
+| Apple M-series (10 cores) | 1 | 22.6 ms  | 14.7 ms  | 1.5× slower |
+| Apple M-series (10 cores) | 8 | 105.0 ms | 118.5 ms | 0.9× (faster) |
+| Linux x86 (GitHub Actions runner) | 1 | 58.0 ms  | 18.7 ms  | 3.1× slower |
+| Linux x86 (GitHub Actions runner) | 8 | 335.7 ms | 145.9 ms | 2.3× slower |
+
+Run `python tests/test_resnet.py --bench` to measure on your machine.
 
 More ops are being added incrementally.
 
