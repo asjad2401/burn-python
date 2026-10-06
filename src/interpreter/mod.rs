@@ -5,7 +5,6 @@ mod context;
 pub mod ops;
 
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use burn_backend::{DType, TensorData, TensorMetadata, backend::ops::FloatTensorOps};
 use numpy::{
@@ -21,10 +20,10 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::tensor::{B, FloatPrim, default_device, flex_to_numpy, numpy_to_flex};
+use crate::tensor::{B, Device, FloatPrim, device_for, numpy_to_tensor, tensor_to_numpy};
 use context::{ExecutionContext, OpResult, weight_key};
 
-fn load_weight(arg: &Argument) -> Option<(String, FloatPrim)> {
+fn load_weight(arg: &Argument, device: &Device) -> Option<(String, FloatPrim)> {
     match arg.value_source {
         ValueSource::Static(_) | ValueSource::Constant => {
             let key = weight_key(arg)?;
@@ -32,7 +31,7 @@ fn load_weight(arg: &Argument) -> Option<(String, FloatPrim)> {
             if !matches!(data.dtype, DType::F32 | DType::F16 | DType::BF16) {
                 return None;
             }
-            Some((key, B::float_from_data(data, &default_device())))
+            Some((key, B::float_from_data(data, device)))
         }
         _ => None,
     }
@@ -61,8 +60,7 @@ fn precompute_bn(
     let c = gamma.shape().iter().next().copied().unwrap_or(1);
 
     // scale = gamma / sqrt(var + eps),  shaped [1, C, 1, 1]
-    let eps_t = B::float_from_data(TensorData::from([eps]), &default_device());
-    let scale_flat = B::float_div(gamma, B::float_sqrt(B::float_add(var, eps_t)));
+    let scale_flat = B::float_div(gamma, B::float_sqrt(B::float_add_scalar(var, eps.into())));
     // offset = beta - mean * scale,  shaped [1, C, 1, 1]
     let offset_flat = B::float_sub(beta, B::float_mul(mean, scale_flat.clone()));
 
@@ -124,7 +122,7 @@ fn fold_conv_bn(
                 Some(b) => b,
                 None => continue, // dynamic bias: leave unfolded
             },
-            None => B::float_from_data(TensorData::zeros::<f32, _>([c_out]), &default_device()),
+            None => B::float_from_data(TensorData::zeros::<f32, _>([c_out]), &B::float_device(&w)),
         };
 
         let w = B::float_mul(
@@ -237,14 +235,7 @@ fn as_f32_array<'py>(
 
 /// Run one node, turning both op errors and backend panics into a message.
 fn run_node(node: &Node, ctx: &mut ExecutionContext) -> OpResult {
-    catch_unwind(AssertUnwindSafe(|| dispatch(node, ctx))).unwrap_or_else(|payload| {
-        let msg = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("unknown panic");
-        Err(msg.to_string())
-    })
+    crate::panic::catch(|| dispatch(node, ctx))?
 }
 
 #[pyclass]
@@ -253,6 +244,8 @@ pub struct OnnxModel {
     weights: HashMap<String, FloatPrim>,
     inputs: Vec<InputSpec>,
     output_names: Vec<String>,
+    backend: String,
+    device: Device,
 }
 
 #[pymethods]
@@ -270,11 +263,11 @@ impl OnnxModel {
             )));
         }
 
-        let mut ctx = ExecutionContext::new(&self.weights);
+        let mut ctx = ExecutionContext::new(&self.weights, &self.device);
         for (spec, obj) in self.inputs.iter().zip(&inputs) {
             let arr = as_f32_array(obj, &spec.name)?;
             spec.check_shape(arr.shape())?;
-            ctx.insert(spec.name.clone(), numpy_to_flex(&arr));
+            ctx.insert(spec.name.clone(), numpy_to_tensor(&arr, &self.device));
         }
 
         for node in &self.nodes {
@@ -293,7 +286,7 @@ impl OnnxModel {
                 let t = ctx.get(name).ok_or_else(|| {
                     PyRuntimeError::new_err(format!("model output '{name}' was never computed"))
                 })?;
-                flex_to_numpy(py, t)
+                tensor_to_numpy(py, t)
             })
             .collect()
     }
@@ -301,15 +294,26 @@ impl OnnxModel {
     fn __repr__(&self) -> String {
         let input_names: Vec<&str> = self.inputs.iter().map(|i| i.name.as_str()).collect();
         format!(
-            "OnnxModel(inputs={:?}, outputs={:?}, nodes={})",
+            "OnnxModel(inputs={:?}, outputs={:?}, nodes={}, backend={:?})",
             input_names,
             self.output_names,
-            self.nodes.len()
+            self.nodes.len(),
+            self.backend
         )
     }
 }
 
-pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
+pub fn load_onnx(path: &str, backend: &str) -> Result<OnnxModel, String> {
+    // backend init (e.g. no usable GPU) fails by panicking, often on a worker thread
+    crate::panic::catch(|| load_onnx_on(path, backend)).unwrap_or_else(|msg| {
+        Err(format!(
+            "failed to load model on backend '{backend}': {msg}"
+        ))
+    })
+}
+
+fn load_onnx_on(path: &str, backend: &str) -> Result<OnnxModel, String> {
+    let device = device_for(backend)?;
     let graph = OnnxGraphBuilder::new()
         .parse_file(path)
         .map_err(|e| e.to_string())?;
@@ -335,7 +339,7 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
     // pass 1: load all named static weights
     for node in &graph.nodes {
         for arg in node.inputs() {
-            if let Some((name, tensor)) = load_weight(arg) {
+            if let Some((name, tensor)) = load_weight(arg, &device) {
                 weights.insert(name, tensor);
             }
         }
@@ -360,6 +364,8 @@ pub fn load_onnx(path: &str) -> Result<OnnxModel, String> {
         output_names,
         nodes,
         weights,
+        backend: backend.to_string(),
+        device,
     })
 }
 

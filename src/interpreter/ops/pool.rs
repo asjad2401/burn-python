@@ -1,6 +1,6 @@
 use super::super::context::{ExecutionContext, OpResult};
 use super::padding::{pad2d, resolve_pads, symmetric};
-use crate::tensor::{B, default_device};
+use crate::tensor::B;
 use burn_backend::{
     TensorData, TensorMetadata,
     backend::ops::{FloatTensorOps, ModuleOps},
@@ -69,7 +69,7 @@ pub fn avg_pool2d(node: &AveragePool2dNode, ctx: &mut ExecutionContext) -> OpRes
             let shape = x.shape();
             let ones = B::float_from_data(
                 TensorData::full(vec![1, 1, shape[2], shape[3]], 1.0f32),
-                &default_device(),
+                &B::float_device(&x),
             );
             let sum = pool(pad2d(x, pads, 0.0), [0, 0], true);
             let count = pool(pad2d(ones, pads, 0.0), [0, 0], true);

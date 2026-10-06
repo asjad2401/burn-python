@@ -15,6 +15,21 @@ x = np.random.randn(1, 3, 224, 224).astype(np.float32)
 output = model([x])[0]
 ```
 
+## Backends
+
+```python
+burn.available_backends()                          # ['flex', 'wgpu']
+model = burn.load_onnx("model.onnx", backend="wgpu")  # run on the GPU
+```
+
+| backend | runs on | notes |
+|---------|---------|-------|
+| `"flex"` (default) | CPU | pure-Rust [burn-flex](https://github.com/tracel-ai/burn) backend |
+| `"wgpu"` | GPU | Metal on macOS, Vulkan on Linux / Windows; first call per input shape compiles and autotunes kernels |
+
+Both use Burn's dispatch backend, so the same interpreter runs on either. If no usable
+GPU is found, `load_onnx(..., backend="wgpu")` raises a `RuntimeError` naming the problem.
+
 ## Status
 
 Early development. The numpy ↔ Burn tensor bridge is done, and the ONNX interpreter
@@ -33,15 +48,16 @@ ResNet-18 runs end to end and matches ONNX Runtime (max logit diff < 1e-5, same 
 for the ONNX Model Zoo exports (`resnet18-v1-7`, `resnet18-v2-7`) and torchvision's
 `resnet18` exported with both `torch.onnx` exporters (legacy and dynamo).
 
-CPU latency vs ONNX Runtime (torchvision export, burn `flex` backend, median of 10 runs).
-Performance varies a lot by platform:
+Latency vs ONNX Runtime on CPU (torchvision export, median of 15 runs after warm-up).
+Numbers vary a lot by platform:
 
-| platform | batch | burn-python | ONNX Runtime | burn / ORT |
-|----------|------:|------------:|-------------:|-----------:|
-| Apple M-series (10 cores) | 1 | 22.6 ms  | 14.7 ms  | 1.5× slower |
-| Apple M-series (10 cores) | 8 | 105.0 ms | 118.5 ms | 0.9× (faster) |
-| Linux x86 (GitHub Actions runner) | 1 | 58.0 ms  | 18.7 ms  | 3.1× slower |
-| Linux x86 (GitHub Actions runner) | 8 | 335.7 ms | 145.9 ms | 2.3× slower |
+| platform | backend | batch 1 | batch 8 |
+|----------|---------|--------:|--------:|
+| Apple M-series (10 cores) | burn-python `wgpu` (Metal GPU) | **6.1 ms** | **35.6 ms** |
+| Apple M-series (10 cores) | burn-python `flex` (CPU) | 22.4 ms | 135.7 ms |
+| Apple M-series (10 cores) | ONNX Runtime (CPU) | 14.9 ms | 123.0 ms |
+| Linux x86 (GitHub Actions runner) | burn-python `flex` (CPU) | 58.0 ms | 335.7 ms |
+| Linux x86 (GitHub Actions runner) | ONNX Runtime (CPU) | 18.7 ms | 145.9 ms |
 
 Run `python tests/test_resnet.py --bench` to measure on your machine.
 
@@ -62,6 +78,8 @@ python tests/test_bridge.py       # numpy <-> Burn tensor bridge
 python tests/compare_ort.py       # correctness + perf vs ONNX Runtime
 python tests/test_ops.py          # op edge cases (padding, pooling, reshape) vs ORT
 python tests/test_resnet.py       # ResNet-18 end to end vs ORT (add --bench for timings)
+
+BURN_BACKEND=wgpu python tests/test_ops.py     # same tests on the GPU backend
 ```
 
 ## License

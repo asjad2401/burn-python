@@ -7,7 +7,7 @@
 use burn_backend::{Slice, TensorData, TensorMetadata, backend::ops::FloatTensorOps};
 use onnx_ir::node::padding::{AutoPad, PaddingConfig2d};
 
-use crate::tensor::{B, FloatPrim, default_device};
+use crate::tensor::{B, FloatPrim};
 
 /// Per-side pads for an NCHW tensor: [top, left, bottom, right].
 pub type Pads2d = [usize; 4];
@@ -63,7 +63,7 @@ pub fn pad2d(x: FloatPrim, pads: Pads2d, value: f32) -> FloatPrim {
 
     let padded = B::float_from_data(
         TensorData::full(vec![n, c, h + top + bottom, w + left + right], value),
-        &default_device(),
+        &B::float_device(&x),
     );
     let range =
         |start: usize, len: usize| Slice::new(start as isize, Some((start + len) as isize), 1);

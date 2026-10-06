@@ -5,6 +5,7 @@ Run with: python tests/test_ops.py
 """
 
 import os
+import re
 import sys
 import tempfile
 import numpy as np
@@ -12,6 +13,8 @@ import onnx
 import onnxruntime as ort
 from onnx import helper, numpy_helper, TensorProto
 import burn_python as burn
+
+BACKEND = os.environ.get("BURN_BACKEND", "flex")  # e.g. BURN_BACKEND=wgpu
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
@@ -36,7 +39,7 @@ def save_model(name, node, x_shape, initializers=(), opset=17):
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
     model.ir_version = 10  # older onnxruntime builds reject newer IR versions
-    path = os.path.join(tmpdir, f"{name}.onnx")
+    path = os.path.join(tmpdir, re.sub(r"[^\w-]+", "_", name) + ".onnx")
     onnx.save(model, path)
     return path
 
@@ -44,7 +47,7 @@ def compare(label, node, x_shape, initializers=(), opset=17):
     path = save_model(label.replace(" ", "_"), node, x_shape, initializers, opset)
     x = np.random.randn(*x_shape).astype(np.float32)
     try:
-        got = burn.load_onnx(path)([x])[0]
+        got = burn.load_onnx(path, backend=BACKEND)([x])[0]
     except BaseException as e:  # pyo3 panics aren't Exception subclasses
         check(f"{label}  ({type(e).__name__}: {e})", False)
         return
@@ -112,9 +115,9 @@ def compare_graph(label, nodes, x_shape, initializers, outputs=("y",), n_nodes=N
     path = graph_model(label.replace(" ", "_"), nodes, x_shape, initializers, outputs)
     x = np.random.randn(*x_shape).astype(np.float32)
     try:
-        model = burn.load_onnx(path)
+        model = burn.load_onnx(path, backend=BACKEND)
         if n_nodes is not None:  # e.g. BN folded away into the conv
-            check(f"{label}  runs {n_nodes} node(s)", f"nodes={n_nodes})" in repr(model))
+            check(f"{label}  runs {n_nodes} node(s)", f"nodes={n_nodes}," in repr(model))
         got = model([x])
     except BaseException as e:
         check(f"{label}  ({type(e).__name__}: {e})", False)
@@ -169,6 +172,21 @@ compare("reshape [0, 0, -1]", node, (2, 3, 4), init)
 node, init = reshape([-1, 4])
 compare("reshape [-1, 4]", node, (2, 3, 4), init)
 
+# ── broadcasting across ranks (numpy-style, as ONNX allows) ──────────────────
+
+print("\n=== broadcasting ===")
+
+for op, x_shape, c_shape in [("Add", (4, 3), (3,)), ("Mul", (2, 3, 5, 4), (3, 1, 1)),
+                             ("Sub", (2, 3, 5, 4), (4,)), ("Div", (3,), (2, 3))]:
+    c = numpy_helper.from_array(np.random.rand(*c_shape).astype(np.float32) + 0.5, "c")
+    compare(f"{op} {list(x_shape)} with {list(c_shape)}",
+            helper.make_node(op, ["x", "c"], ["y"]), x_shape, [c])
+
+gemm_c = numpy_helper.from_array(np.random.randn(2).astype(np.float32), "C")
+compare("Gemm alpha/beta, rank-1 C",
+        helper.make_node("Gemm", ["x", "W2", "C"], ["y"], alpha=0.5, beta=2.0),
+        (3, 4), [numpy_helper.from_array(np.random.randn(4, 2).astype(np.float32), "W2"), gemm_c])
+
 # ── reductions ───────────────────────────────────────────────────────────────
 
 print("\n=== reductions ===")
@@ -191,7 +209,7 @@ print("\n=== load errors ===")
 
 path = save_model("unsupported", helper.make_node("Exp", ["x"], ["y"]), (2, 3))
 try:
-    burn.load_onnx(path)
+    burn.load_onnx(path, backend=BACKEND)
     check("unsupported op raises at load", False)
 except RuntimeError as e:
     check(f"unsupported op raises at load  ({e})", "Exp" in str(e))
@@ -205,11 +223,14 @@ def raises(label, fn, exc, *needles):
     except BaseException as e:  # e.g. pyo3 PanicException
         check(f"{label}  (wrong exception {type(e).__name__}: {e})", False)
 
+raises("unknown backend", lambda: burn.load_onnx(path, backend="tpu"), ValueError, "tpu", "flex")
+
 # ── inference errors ─────────────────────────────────────────────────────────
 
 print("\n=== inference errors ===")
 
-relu = burn.load_onnx(save_model("relu", helper.make_node("Relu", ["x"], ["y"]), ("N", 3)))
+relu = burn.load_onnx(save_model("relu", helper.make_node("Relu", ["x"], ["y"]), ("N", 3)),
+                      backend=BACKEND)
 raises("float64 input", lambda: relu([np.zeros((2, 3))]), TypeError, "float32", "float64")
 raises("non-array input", lambda: relu([[1.0, 2.0, 3.0]]), TypeError, "numpy array")
 raises("wrong rank", lambda: relu([np.zeros((2, 3, 1), np.float32)]), ValueError, "[?, 3]")
@@ -220,9 +241,10 @@ raises("wrong input count", lambda: relu([]), ValueError, "expected 1 input")
 # doesn't match W, declared as fully dynamic so the input check lets it through
 gemm_w = numpy_helper.from_array(np.ones((4, 2), np.float32), "W")
 gemm = burn.load_onnx(save_model(
-    "gemm_dyn", helper.make_node("Gemm", ["x", "W"], ["y"]), ("N", "K"), [gemm_w]))
+    "gemm_dyn", helper.make_node("Gemm", ["x", "W"], ["y"]), ("N", "K"), [gemm_w]),
+    backend=BACKEND)
 raises("backend panic -> RuntimeError with node context",
-       lambda: gemm([np.zeros((2, 3), np.float32)]), RuntimeError, "(Gemm)", "inner dimensions")
+       lambda: gemm([np.zeros((2, 3), np.float32)]), RuntimeError, "(Gemm)")
 
 # ── non-contiguous inputs ────────────────────────────────────────────────────
 
