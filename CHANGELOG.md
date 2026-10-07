@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- PyPI packaging: `.github/workflows/release.yml` builds abi3 wheels (one per platform,
+  Python ≥ 3.9) for Linux x86_64/aarch64, macOS arm64/x86_64 and Windows x86_64, tests
+  them on Python 3.9 and 3.13, and publishes to PyPI via trusted publishing on a `vX.Y.Z` tag.
 - GPU inference: `load_onnx(path, backend="wgpu")`, compiled to Metal on macOS and
   Vulkan on Linux / Windows. ResNet-18 on an Apple M-series GPU: 6.1 ms at batch 1,
   35.6 ms at batch 8 (~3x faster than ONNX Runtime on CPU). `available_backends()`
@@ -30,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial maturin/pyo3 project scaffold, `burn-flex` + `onnx-ir` dependencies.
 
 ### Changed
+- License files now match the declared license: dual MIT / Apache-2.0
+  (`LICENSE-MIT`, `LICENSE-APACHE`), replacing a GPL-3.0 `LICENSE` file that contradicted it.
+- `Cargo.lock` is committed and release builds use `--locked`.
+- Package version comes from `Cargo.toml` only.
 - All ops now run on burn-dispatch's `Dispatch` backend; the device is chosen per model.
   The unused `burn` umbrella dependency was replaced by `burn-dispatch`.
 - Backend failures that happen on a worker thread (e.g. no GPU adapter) now report the
