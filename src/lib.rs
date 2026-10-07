@@ -2,6 +2,7 @@ use numpy::{PyArrayDyn, PyReadonlyArrayDyn};
 use pyo3::prelude::*;
 
 mod interpreter;
+mod panic;
 mod tensor;
 
 use interpreter::OnnxModel;
@@ -12,26 +13,31 @@ fn roundtrip<'py>(
     py: Python<'py>,
     arr: PyReadonlyArrayDyn<'py, f32>,
 ) -> PyResult<Bound<'py, PyArrayDyn<f32>>> {
-    let prim = tensor::numpy_to_flex(&arr);
-    tensor::flex_to_numpy(py, prim)
+    let prim = tensor::numpy_to_tensor(&arr, &tensor::cpu_device());
+    tensor::tensor_to_numpy(py, prim)
 }
 
-/// Load an ONNX model from a file path.
+/// Load an ONNX model from a file path, to run on the given backend.
 #[pyfunction]
-fn load_onnx(path: &str) -> PyResult<OnnxModel> {
-    interpreter::load_onnx(path).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+#[pyo3(signature = (path, backend = "flex"))]
+fn load_onnx(path: &str, backend: &str) -> PyResult<OnnxModel> {
+    tensor::device_for(backend).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    interpreter::load_onnx(path, backend).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// Backends compiled into this build.
+#[pyfunction]
+fn available_backends() -> Vec<&'static str> {
+    tensor::BACKENDS.to_vec()
 }
 
 #[pymodule]
 fn _burn_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Panics inside ops are caught and re-raised as Python exceptions that carry the
-    // message, so the default hook's stderr dump is just noise. RUST_BACKTRACE keeps it.
-    if std::env::var_os("RUST_BACKTRACE").is_none() {
-        std::panic::set_hook(Box::new(|_| {}));
-    }
+    panic::install_hook();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(load_onnx, m)?)?;
+    m.add_function(wrap_pyfunction!(available_backends, m)?)?;
     m.add_class::<OnnxModel>()?;
     Ok(())
 }

@@ -1,8 +1,8 @@
 use super::super::context::{ExecutionContext, OpResult};
 use super::padding::{pad2d, resolve_pads, symmetric};
-use crate::tensor::{B, default_device};
+use crate::tensor::B;
 use burn_backend::{
-    TensorData, TensorMetadata,
+    TensorMetadata,
     backend::ops::ConvOptions,
     backend::ops::{FloatTensorOps, ModuleOps},
 };
@@ -78,8 +78,7 @@ pub fn batch_norm_fused(node: &BatchNormalizationNode, ctx: &mut ExecutionContex
             .chain(std::iter::repeat_n(1, rank - 2))
             .collect();
         let bcast = |t| B::float_reshape(t, bshape.clone().into());
-        let eps_t = B::float_from_data(TensorData::from([eps]), &default_device());
-        let denom = B::float_sqrt(B::float_add(bcast(var), eps_t));
+        let denom = B::float_sqrt(B::float_add_scalar(bcast(var), eps.into()));
         let y = B::float_div(B::float_sub(x, bcast(mean)), denom);
         let y = B::float_mul(y, bcast(gamma));
         let y = B::float_add(y, bcast(beta));

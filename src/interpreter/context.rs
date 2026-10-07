@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use burn_backend::backend::ops::FloatTensorOps;
 use onnx_ir::ir::{Argument, ValueSource};
 
-use crate::tensor::{B, FloatPrim, default_device};
+use crate::tensor::{B, Device, FloatPrim};
 
 /// Key a static/constant argument is pre-loaded under in the weights map.
 /// onnx-ir often hands initializers over as anonymous statics (name ""), so those
@@ -25,13 +25,15 @@ pub type OpResult = Result<(), String>;
 pub struct ExecutionContext<'w> {
     tensors: HashMap<String, FloatPrim>,
     weights: &'w HashMap<String, FloatPrim>,
+    device: &'w Device,
 }
 
 impl<'w> ExecutionContext<'w> {
-    pub fn new(weights: &'w HashMap<String, FloatPrim>) -> Self {
+    pub fn new(weights: &'w HashMap<String, FloatPrim>, device: &'w Device) -> Self {
         Self {
             tensors: HashMap::new(),
             weights,
+            device,
         }
     }
 
@@ -56,10 +58,7 @@ impl<'w> ExecutionContext<'w> {
             ValueSource::Static(_) => weight_key(arg)
                 .and_then(|key| self.weights.get(&key).cloned())
                 // not pre-loaded (e.g. non-float data) — convert on the fly
-                .or_else(|| {
-                    arg.value()
-                        .map(|d| B::float_from_data(d, &default_device()))
-                }),
+                .or_else(|| arg.value().map(|d| B::float_from_data(d, self.device))),
             ValueSource::Optional => None,
         }
     }

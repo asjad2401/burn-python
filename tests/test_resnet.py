@@ -15,6 +15,8 @@ import numpy as np
 import onnxruntime as ort
 import burn_python as burn
 
+BACKEND = os.environ.get("BURN_BACKEND", "flex")  # e.g. BURN_BACKEND=wgpu
+
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 ZOO_URL = "https://github.com/onnx/models/raw/main/validated/vision/classification/resnet/model/{}.onnx"
 BATCHES = [1, 4]
@@ -84,7 +86,7 @@ models = [zoo_model("resnet18-v1-7"), zoo_model("resnet18-v2-7")] + torch_models
 
 for path in models:
     print(f"\n=== {os.path.basename(path)} ===")
-    model = burn.load_onnx(path)
+    model = burn.load_onnx(path, backend=BACKEND)
     sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     input_name = sess.get_inputs()[0].name
 

@@ -1,5 +1,6 @@
 use super::super::context::{ExecutionContext, OpResult};
-use crate::tensor::{B, default_device};
+use super::broadcast::align;
+use crate::tensor::B;
 use burn_backend::backend::ops::FloatTensorOps;
 use onnx_ir::{gemm::GemmNode, linear::LinearNode};
 
@@ -19,7 +20,10 @@ pub fn linear(node: &LinearNode, ctx: &mut ExecutionContext) -> OpResult {
 
     // bias is optional (3rd input)
     let y = match node.inputs.get(2).and_then(|a| ctx.resolve(a)) {
-        Some(b) => B::float_add(y, b),
+        Some(b) => {
+            let (y, b) = align(y, b);
+            B::float_add(y, b)
+        }
         None => y,
     };
 
@@ -47,24 +51,17 @@ pub fn gemm(node: &GemmNode, ctx: &mut ExecutionContext) -> OpResult {
     let mut y = B::float_matmul(a, b);
 
     if node.config.alpha != 1.0 {
-        let alpha = B::float_from_data(
-            burn_backend::TensorData::from([node.config.alpha]),
-            &default_device(),
-        );
-        y = B::float_mul(y, alpha);
+        y = B::float_mul_scalar(y, node.config.alpha.into());
     }
 
     if let Some(c) = node.inputs.get(2).and_then(|a| ctx.resolve(a)) {
         let c = if node.config.beta != 1.0 {
-            let beta = B::float_from_data(
-                burn_backend::TensorData::from([node.config.beta]),
-                &default_device(),
-            );
-            B::float_mul(c, beta)
+            B::float_mul_scalar(c, node.config.beta.into())
         } else {
             c
         };
-        y = B::float_add(y, c);
+        let (y_aligned, c) = align(y, c);
+        y = B::float_add(y_aligned, c);
     }
 
     ctx.insert(node.outputs[0].name.clone(), y);

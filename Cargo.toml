@@ -10,13 +10,25 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3   = { version = "0.28", features = ["extension-module"] }
 numpy  = "0.28"
-burn   = { version = "0.21", features = ["flex"] }
 burn-flex    = "0.21"
+# listed directly so its default features (autotune, fusion) are on
+burn-wgpu    = "0.21"
 burn-backend = "0.21"
 onnx-ir      = "0.21"
 cubecl-common = "0.10"
 bytes     = "1"
 bytemuck  = { version = "1", features = ["extern_crate_alloc"] }
+
+# All ops go through burn-dispatch: Flex on CPU, wgpu on GPU. The GPU path is compiled
+# to each platform's native shading language — Metal (MSL) on macOS, Vulkan (SPIR-V)
+# elsewhere — which is several times faster than the portable WGSL path (no access to
+# matrix hardware). burn-dispatch allows only one wgpu flavor per build, hence per target.
+# wgpu loads the GPU driver at runtime, so CPU-only machines still work with "flex".
+[target.'cfg(target_os = "macos")'.dependencies]
+burn-dispatch = { version = "0.21", default-features = false, features = ["std", "flex", "metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+burn-dispatch = { version = "0.21", default-features = false, features = ["std", "flex", "vulkan"] }
 
 [profile.release]
 lto = true
