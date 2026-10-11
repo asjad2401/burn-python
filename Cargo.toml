@@ -2,13 +2,17 @@
 name = "burn-python"
 version = "0.1.0"
 edition = "2024"
+description = "Python inference frontend for the Burn deep learning framework"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/asjad2401/burn-python"
+publish = false
 
 [lib]
 name = "_burn_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3   = { version = "0.28", features = ["extension-module"] }
+pyo3   = { version = "0.28", features = ["extension-module", "abi3-py39"] }
 numpy  = "0.28"
 burn-flex    = "0.21"
 # listed directly so its default features (autotune, fusion) are on

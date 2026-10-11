@@ -4,11 +4,33 @@ build-backend = "maturin"
 
 [project]
 name = "burn-python"
-version = "0.1.0"
+# taken from Cargo.toml, so there is a single version to bump
+dynamic = ["version"]
+description = "Python inference frontend for the Burn deep learning framework: ONNX models, numpy in, numpy out, on CPU or GPU"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.20"]
-description = "Python inference frontend for the Burn deep learning framework"
-license = { text = "MIT OR Apache-2.0" }
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+authors = [{ name = "Asjad Ali" }]
+keywords = ["burn", "onnx", "inference", "deep-learning", "gpu", "wgpu"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/asjad2401/burn-python"
+Changelog = "https://github.com/asjad2401/burn-python/blob/main/CHANGELOG.md"
+Issues = "https://github.com/asjad2401/burn-python/issues"
+"Burn RFC" = "https://github.com/tracel-ai/burn/discussions/4990"
 
 [tool.maturin]
 module-name = "burn_python._burn_python"

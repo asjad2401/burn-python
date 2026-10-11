@@ -6,6 +6,13 @@ Python inference frontend for the [Burn](https://github.com/tracel-ai/burn) deep
 
 Load an ONNX model and run inference from Python — numpy in, numpy out. No Rust required.
 
+```bash
+pip install burn-python
+```
+
+Prebuilt wheels for Linux (x86_64, aarch64), macOS (arm64, x86_64) and Windows (x86_64),
+any Python ≥ 3.9. GPU support is included.
+
 ```python
 import burn_python as burn
 import numpy as np
@@ -63,7 +70,7 @@ Run `python tests/test_resnet.py --bench` to measure on your machine.
 
 More ops are being added incrementally.
 
-## Building
+## Building from source
 
 ```bash
 pip install maturin
@@ -84,4 +91,9 @@ BURN_BACKEND=wgpu python tests/test_ops.py     # same tests on the GPU backend
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
